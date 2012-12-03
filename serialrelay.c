@@ -6,6 +6,8 @@
 #include <string.h> // needed for memset
 #include <dirent.h>
 #include <signal.h>
+#include <sys/file.h>
+#include <errno.h>
 
 #define TTYDEV "/home/www-data/web2py/scripts/ttyUSB0"
 
@@ -17,6 +19,10 @@ void sigcatch(int sig)
 {
   tcsetattr(STDOUT_FILENO, TCSAFLUSH, &old_stdout);
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_stdin);
+  
+  if( flock(tty_fd, LOCK_UN) == -1 ) {
+    fprintf( stderr,  "flock() unlock failed with %s (%i)\n", strerror(errno), errno );
+  }
   close(tty_fd);
 
   exit(0);
@@ -59,6 +65,36 @@ int main(int argc,char** argv)
       exit(1);
     }
 
+  /////////////// acquire lock on TTY and also set its parameters
+  memset(&tio,0,sizeof(tio));
+  tio.c_iflag=0;
+  tio.c_oflag=0;
+  tio.c_cflag=CS8|CREAD|CLOCAL;           // 8n1, see termios.h for more information
+  tio.c_lflag=0;
+  tio.c_cc[VMIN]=1;
+  tio.c_cc[VTIME]=5;
+ 
+  //  tty_fd=open(TTYDEV, O_RDWR | O_NONBLOCK);
+  tty_fd=open(TTYDEV, O_RDWR );
+  if( tty_fd == -1 ) {
+    fprintf( stderr, "Can't open device %s\n", TTYDEV );
+    return -1;
+  }
+  if(flock( tty_fd, LOCK_EX | LOCK_NB ) == -1) {
+    fprintf( stderr, "flock() locking failed with %s (%d)\n", strerror(errno), errno );
+    if( errno == EWOULDBLOCK ) {
+      fprintf( stderr, "Another using is using the TTY. Try overriding their access.\n" );
+    }
+    close(tty_fd);
+    return 1;
+  }
+
+  cfsetospeed(&tio,B115200);            // 115200 baud
+  cfsetispeed(&tio,B115200);            // 115200 baud
+ 
+  tcsetattr(tty_fd,TCSANOW,&tio);
+
+  /////////// stdin/stdout set to "raw" mode with canonical (non-blocking)
   memset(&new_stdout,0,sizeof(new_stdout));
   memset(&old_stdout,0,sizeof(old_stdout));
   if( tcgetattr(STDOUT_FILENO, &old_stdout) < 0 )
@@ -93,24 +129,6 @@ int main(int argc,char** argv)
   tcsetattr(STDOUT_FILENO,TCSAFLUSH,&new_stdout);
 //  fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);       // make the reads non-blocking
 
-  memset(&tio,0,sizeof(tio));
-  tio.c_iflag=0;
-  tio.c_oflag=0;
-  tio.c_cflag=CS8|CREAD|CLOCAL;           // 8n1, see termios.h for more information
-  tio.c_lflag=0;
-  tio.c_cc[VMIN]=1;
-  tio.c_cc[VTIME]=5;
- 
-  //  tty_fd=open(TTYDEV, O_RDWR | O_NONBLOCK);
-  tty_fd=open(TTYDEV, O_RDWR );
-  if( tty_fd == -1 ) {
-    fprintf( stderr, "Can't open device %s\n", TTYDEV );
-    return -1;
-  }
-  cfsetospeed(&tio,B115200);            // 115200 baud
-  cfsetispeed(&tio,B115200);            // 115200 baud
- 
-  tcsetattr(tty_fd,TCSANOW,&tio);
 
   // jail myself in case someone finds a way to break me
   // (note: jail AFTER the file handle to the console is opened ;)
@@ -119,14 +137,20 @@ int main(int argc,char** argv)
   setuid(33); // set my ID to www-data once this is called so I can kill myself
 
   // just do a quick print to stderr to validate the jail everytime i run...
-  m = sprintf(dirstr, "I'm in JAIL! Let's see what's in /...");
-  write(STDERR_FILENO, dirstr, m);
+  //m = sprintf(dirstr, "Checking jail...");
+  //write(STDERR_FILENO, dirstr, m);
   n = scandir("/", &namelist, 0, alphasort);
-  if (n < 0)
-    perror("scandir");
+  if (n < 0) {
+    // no need to mention anything if this is the case...
+    //perror("scandir");
+    //m = sprintf(dirstr, "\n\rlooks good, carry on.\n\r");
+    //write(STDERR_FILENO, dirstr, m);
+  }
   else {
+    m = sprintf(dirstr, "\n\rchroot jail is broken! I can see the contents of /...this is bad.\n\r");
+    write(STDERR_FILENO, dirstr, m);
     while (n--) {
-      m = sprintf(dirstr, "%s\n", namelist[n]->d_name);
+      m = sprintf(dirstr, "%s\n\r", namelist[n]->d_name);
       write(STDERR_FILENO, dirstr, m);
       free(namelist[n]);
     }
@@ -172,6 +196,9 @@ int main(int argc,char** argv)
 
     }
  
+  if( flock(tty_fd, LOCK_UN) == -1 ) {
+    fprintf( stderr,  "flock() unlock failed with %s (%i)\n", strerror(errno), errno );
+  }
   close(tty_fd);
 
   tcsetattr(STDOUT_FILENO, TCSAFLUSH, &old_stdout);
