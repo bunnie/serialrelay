@@ -48,6 +48,8 @@ int main(int argc,char** argv)
   char bfr[512];
   int count;
 
+  char *tty_devname;
+
   /* Catch the most popular signals. */
   if((int) signal(SIGINT,sigcatch) < 0)
     {
@@ -65,6 +67,12 @@ int main(int argc,char** argv)
       exit(1);
     }
 
+  if( argc == 2 ) {
+    tty_devname = argv[1];
+  } else {
+    tty_devname = TTYDEV;
+  }
+
   /////////////// acquire lock on TTY and also set its parameters
   memset(&tio,0,sizeof(tio));
   tio.c_iflag=0;
@@ -75,9 +83,9 @@ int main(int argc,char** argv)
   tio.c_cc[VTIME]=5;
  
   //  tty_fd=open(TTYDEV, O_RDWR | O_NONBLOCK);
-  tty_fd=open(TTYDEV, O_RDWR );
+  tty_fd=open(tty_devname, O_RDWR );
   if( tty_fd == -1 ) {
-    fprintf( stderr, "Can't open device %s\n", TTYDEV );
+    fprintf( stderr, "Can't open device %s\n", tty_devname );
     return -1;
   }
   if(flock( tty_fd, LOCK_EX | LOCK_NB ) == -1) {
